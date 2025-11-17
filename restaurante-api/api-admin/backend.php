@@ -1,0 +1,85 @@
+<?php
+declare(strict_types=1);
+
+// === CORS ===
+header('Access-Control-Allow-Origin: http://restaurante-api.test');
+header('Access-Control-Allow-Methods: POST, GET, PUT, OPTIONS, DELETE');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+
+// Manejar preflight
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
+
+require_once '../flight/Flight.php';
+require_once '../config/config.php';
+require_once '../libs/AppAPI.php';
+
+$app = new AppAPI();
+
+// 3. Dashboard Stats
+Flight::route('GET /admin/dashboard', function () use ($app)  {
+    //if (!$authenticate()) return;
+
+    $stats = [
+        'foods' => $app->link->query("SELECT COUNT(*) FROM foods")->fetchColumn(),
+        'orders' => $app->link->query("SELECT COUNT(*) FROM orders")->fetchColumn(),
+        'bookings' => $app->link->query("SELECT COUNT(*) FROM bookings")->fetchColumn(),
+        'admins' => $app->link->query("SELECT COUNT(*) FROM admins")->fetchColumn(),
+    ];
+
+    Flight::json([
+        'status' => 'success',
+        'data' => $stats
+    ], 200);
+});
+
+// 1. Login Admin
+Flight::route('POST /admin/login', function () use ($app) {
+    $email = Flight::request()->data->email ?? null;
+    $password = Flight::request()->data->password ?? null;
+
+    if (!$email || !$password) {
+        Flight::json(['status' => 'error', 'message' => 'Email y contraseña requeridos'], 400);
+        return;
+    }
+
+    $query = "SELECT id, adminname, email, password FROM admins WHERE email = :email";
+    $stmt = $app->link->prepare($query);
+    $stmt->execute(['email' => $email]);
+    $admin = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($admin && password_verify($password, $admin['password'])) {
+        $payload = [
+            'iat' => time(),
+            'exp' => time() + (60 * 60 * 24),
+            'sub' => $admin['id'],
+            'email' => $admin['email'],
+            'adminname' => $admin['adminname'],
+            'role' => 'admin'
+        ];
+        $jwt = JWT::encode($payload, JWT_SECRET, 'HS256');
+
+        Flight::json([
+            'status' => 'success',
+            'message' => 'Login exitoso',
+            'data' => [
+                'token' => $jwt,
+                'admin' => [
+                    'id' => $admin['id'],
+                    'adminname' => $admin['adminname'],
+                    'email' => $admin['email']
+                ]
+            ]
+        ], 200);
+    } else {
+        Flight::json(['status' => 'error', 'message' => 'Credenciales inválidas'], 401);
+    }
+});
+
+Flight::start();
+
+
+
