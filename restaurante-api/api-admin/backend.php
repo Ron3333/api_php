@@ -220,7 +220,257 @@ Flight::route('POST /admin/admins', function () use ($app, $authenticate) {
     ], 201);
 });
 
+/****************************************** Foods **************************************************/
+
+// === CRUD FOODS ===
+
+// 1. Listar todos los foods
+Flight::route('GET /admin/foods', function () use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $query = "SELECT f.*, 
+                     CASE 
+                       WHEN f.meal_id = 1 THEN 'Breakfast'
+                       WHEN f.meal_id = 2 THEN 'Lunch'
+                       WHEN f.meal_id = 3 THEN 'Dinner'
+                       ELSE 'Unknown'
+                     END as meal_name
+              FROM foods f ORDER BY f.id DESC";
+    $foods = $app->selectAll($query);
+
+    Flight::json([
+        'status' => 'success',
+        'data' => $foods ?: []
+    ], 200);
+});
+
+// 2. Obtener un food por ID
+Flight::route('GET /admin/foods/@id', function ($id) use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $id = intval($id);
+    $query = "SELECT * FROM foods WHERE id = :id";
+    $food = $app->selectOne($query, ['id' => $id]);
+
+    if (!$food) {
+        Flight::json(['status' => 'error', 'message' => 'Food no encontrado'], 404);
+        return;
+    }
+
+    Flight::json([
+        'status' => 'success',
+        'data' => $food
+    ], 200);
+});
+
+// 3. Crear food (con subida de imagen)
+Flight::route('POST /admin/foods', function () use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    // === LEER DATOS DEL FORMULARIO ===
+    $request = Flight::request();
+    $name = $request->data->name ?? null;
+    $price = $request->data->price ?? null;
+    $description = $request->data->description ?? null;
+    $meal_id = intval( $request->data->meal_id ?? null );
+
+
+
+    if (!$name || !$price || !$description || !$meal_id) {
+        Flight::json(['status' => 'error', 'message' => 'Faltan campos requeridos'], 400);
+        return;
+    }
+
+    // === LEER ARCHIVO CON FLIGHT ===
+    $uploadedFiles = $request->getUploadedFiles();
+    if (!isset($uploadedFiles['image'])) {
+        Flight::json(['status' => 'error', 'message' => 'Imagen requerida'], 400);
+        return;
+    }
+
+    $file = $uploadedFiles['image'];
+    if ($file->getError() !== UPLOAD_ERR_OK) {
+        Flight::json(['status' => 'error', 'message' => 'Error al subir imagen: ' . $file->getError()], 400);
+        return;
+    }
+
+    // Validar extensión
+    $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    $ext = strtolower(pathinfo($file->getClientFilename(), PATHINFO_EXTENSION));
+    if (!in_array($ext, $allowed)) {
+        Flight::json(['status' => 'error', 'message' => 'Extensión no permitida'], 400);
+        return;
+    }
+
+    // Generar nombre único
+    $uniqueName = uniqid('food_', true) . '.' . $ext;
+    $uploadDir = __DIR__ . "/foods-images/";
+    $filePath = $uploadDir . $uniqueName;
+
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+
+    // Mover archivo
+    try {
+        $file->moveTo($filePath);
+    } catch (Exception $e) {
+        Flight::json(['status' => 'error', 'message' => 'Error al guardar imagen'], 500);
+        return;
+    }
+
+    // Insertar en DB
+    $query = "INSERT INTO foods (name, price, description, meal_id, image) VALUES (:name, :price, :description, :meal_id, :image)";
+    //var_dump( $meal_id);
+   // exit();
+    $params = [
+        ':name' => $name,
+        ':price' => $price,
+        ':description' => $description,
+        ':meal_id' => $meal_id,
+        ':image' => $uniqueName
+    ];
+
+    //var_dump($params );
+    //exit();
+
+    try {
+        $app->register($query, $params);
+        Flight::json([
+            'status' => 'success',
+            'message' => 'Food creado',
+            'data' => [
+                'id' => $app->link->lastInsertId(),
+                'image' => $uniqueName
+            ]
+        ], 201);
+    } catch (Exception $e) {
+        @unlink($filePath);
+        error_log("DB Error: " . $e->getMessage());
+        Flight::json(['status' => 'error', 'message' => 'Error en base de datos', 'DB' => $e->getMessage() ], 500);
+    }
+});
+
+// 4. Actualizar food (RESTful + imagen opcional)
+
+Flight::route('PUT /admin/foods/@id', function ($id) use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $id = intval($id);
+    $request = Flight::request();
+
+    // === SOLO application/json → Flight::request()->data funciona perfecto ===
+    $name = trim($request->data->name ?? '');
+    $price = trim($request->data->price ?? '');
+    $description = trim($request->data->description ?? '');
+    $meal_id = trim($request->data->meal_id ?? '');
+    $image = trim($request->data->image ?? ''); // ← URL de la imagen
+
+    if ($name === '' || $price === '' || $description === '' || $meal_id === '') {
+        Flight::json(['status' => 'error', 'message' => 'Campos requeridos'], 400);
+        return;
+    }
+
+    $price = floatval($price);
+    $meal_id = intval($meal_id);
+
+    // === OBTENER IMAGEN ACTUAL (si no se envía nueva) ===
+    if ($image === '') {
+        $current = $app->selectOne("SELECT image FROM foods WHERE id = :id", ['id' => $id]);
+        if (!$current) {
+            Flight::json(['status' => 'error', 'message' => 'Food no encontrado'], 404);
+            return;
+        }
+        $image = $current->image;
+    } else {
+        // Validar que la imagen exista en el servidor
+        $uploadDir = __DIR__ . "/foods-images/";
+        if (!file_exists($uploadDir . $image)) {
+            Flight::json(['status' => 'error', 'message' => 'Imagen no encontrada'], 400);
+            return;
+        }
+    }
+
+    // === ACTUALIZAR ===
+    $query = "UPDATE foods SET name = :name, price = :price, description = :description, meal_id = :meal_id, image = :image WHERE id = :id";
+    $params = [
+        ':name' => $name,
+        ':price' => $price,
+        ':description' => $description,
+        ':meal_id' => $meal_id,
+        ':image' => $image,
+        ':id' => $id
+    ];
+
+    try {
+        $app->update($query, $params);
+        Flight::json(['status' => 'success', 'message' => 'Food actualizado'], 200);
+    } catch (Exception $e) {
+        Flight::json(['status' => 'error', 'message' => 'Error DB', 'DB' => $e->getMessage()], 500);
+    }
+});
+
+Flight::route('POST /admin/upload', function () use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $uploadedFiles = Flight::request()->getUploadedFiles();
+    if (!isset($uploadedFiles['image']) || $uploadedFiles['image']->getError() !== UPLOAD_ERR_OK) {
+        Flight::json(['status' => 'error', 'message' => 'Imagen requerida'], 400);
+        return;
+    }
+
+    $file = $uploadedFiles['image'];
+    $ext = strtolower(pathinfo($file->getClientFilename(), PATHINFO_EXTENSION));
+    $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    if (!in_array($ext, $allowed)) {
+        Flight::json(['status' => 'error', 'message' => 'Extensión no permitida'], 400);
+        return;
+    }
+
+    $uniqueName = uniqid('food_', true) . '.' . $ext;
+    $uploadDir = __DIR__ . "/foods-images/";
+    $filePath = $uploadDir . $uniqueName;
+
+    if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+
+    try {
+        $file->moveTo($filePath);
+        Flight::json([
+            'status' => 'success',
+            'message' => 'Imagen subida',
+            'data' => ['image' => $uniqueName]
+        ], 201);
+    } catch (Exception $e) {
+        Flight::json(['status' => 'error', 'message' => 'Error al guardar'], 500);
+    }
+});
+
+// 5. Eliminar food
+Flight::route('DELETE /admin/foods/@id', function ($id) use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $id = intval($id);
+    $query = "SELECT image FROM foods WHERE id = :id";
+
+
+    $food = $app->selectOne($query, ['id' => $id]);
+
+
+    if (!$food) {
+        Flight::json(['status' => 'error', 'message' => 'Food no encontrado'], 404);
+        return;
+    }
+
+    @unlink(__DIR__ . "/foods-images/" . $food->image);
+
+    $query = "DELETE FROM foods WHERE id = :id";
+    $app->delete($query, ['id' => $id]);
+
+    Flight::json(['status' => 'success', 'message' => 'Food eliminado'], 200);
+});
+
 Flight::start();
+
 
 
 
