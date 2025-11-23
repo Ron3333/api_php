@@ -99,6 +99,19 @@ Flight::route('GET /admin/dashboard', function () use ($app)  {
     ], 200);
 });
 
+// 4. Listar Admins
+Flight::route('GET /admin/admins', function () use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $query = "SELECT id, adminname, email FROM admins";
+    $admins = $app->selectAll($query);
+
+    Flight::json([
+        'status' => 'success',
+        'data' => $admins ?: []
+    ], 200);
+});
+
 // 1. Login Admin
 Flight::route('POST /admin/login', function () use ($app) {
     $email = Flight::request()->data->email ?? null;
@@ -143,6 +156,7 @@ Flight::route('POST /admin/login', function () use ($app) {
 });
 
 Flight::start();
+
 
 
 
