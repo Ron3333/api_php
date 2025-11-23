@@ -111,6 +111,34 @@ Flight::route('GET /admin/admins', function () use ($app, $authenticate) {
         'data' => $admins ?: []
     ], 200);
 });
+// Delete admin
+Flight::route('DELETE /admin/admins/@id', function ($id) use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    $id = intval($id);
+    if ($id <= 0) {
+        Flight::json(['status' => 'error', 'message' => 'ID inválido'], 400);
+        return;
+    }
+
+    $admin = Flight::get('current_admin');
+    //var_dump($admin->id);
+    //exit();
+
+    if ($id == $admin->id) {
+        Flight::json(['status' => 'error', 'message' => 'No puedes eliminarte a ti mismo'], 403);
+        return;
+    }
+
+    $delete = $app->link->prepare("DELETE FROM admins WHERE id = :id");
+    $delete->execute(['id' => $id]);
+
+    if ($delete->rowCount() > 0) {
+        Flight::json(['status' => 'success', 'message' => 'Admin eliminado'], 200);
+    } else {
+        Flight::json(['status' => 'error', 'message' => 'Admin no encontrado'], 404);
+    }
+});
 
 // 1. Login Admin
 Flight::route('POST /admin/login', function () use ($app) {
@@ -156,6 +184,7 @@ Flight::route('POST /admin/login', function () use ($app) {
 });
 
 Flight::start();
+
 
 
 
