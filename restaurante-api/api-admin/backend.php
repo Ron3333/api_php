@@ -183,7 +183,45 @@ Flight::route('POST /admin/login', function () use ($app) {
     }
 });
 
+// 5. Crear Admin
+
+Flight::route('POST /admin/admins', function () use ($app, $authenticate) {
+    if (!$authenticate()) return;
+
+    // VOLVEMOS A USAR Flight::request()->data
+    $adminname = Flight::request()->data->adminname ?? null;
+    $email = Flight::request()->data->email ?? null;
+    $password = Flight::request()->data->password ?? null;
+
+    if (!$adminname || !$email || !$password) {
+        Flight::json(['status' => 'error', 'message' => 'Todos los campos son obligatorios'], 400);
+        return;
+    }
+
+    $check = $app->link->prepare("SELECT id FROM admins WHERE email = :email");
+    $check->execute(['email' => $email]);
+    if ($check->rowCount() > 0) {
+        Flight::json(['status' => 'error', 'message' => 'Email ya registrado'], 409);
+        return;
+    }
+
+    $hashed = password_hash($password, PASSWORD_DEFAULT);
+    $insert = $app->link->prepare("INSERT INTO admins (adminname, email, password) VALUES (:adminname, :email, :password)");
+    $insert->execute([
+        'adminname' => $adminname,
+        'email' => $email,
+        'password' => $hashed
+    ]);
+
+    Flight::json([
+        'status' => 'success',
+        'message' => 'Admin creado',
+        'data' => ['id' => $app->link->lastInsertId()]
+    ], 201);
+});
+
 Flight::start();
+
 
 
 
