@@ -19,6 +19,69 @@ require_once '../libs/AppAPI.php';
 
 $app = new AppAPI();
 
+$authenticate = function () use ($app) {
+
+    $headers = getallheaders();
+
+   //var_dump($headers);
+   /*
+    Flight::json([
+        'debug_headers' => $headers,
+        'raw_server' => $_SERVER
+    ], 200);
+   
+     exit();
+ */
+    $headers = getallheaders();
+    $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? null;
+    
+
+    if (!$authHeader || !preg_match('/Bearer\s+([^\s]+)/', $authHeader, $matches)) {
+        Flight::json([
+            'status' => 'error',
+            'message' => 'Token requerido'
+        ], 401);
+        return false;
+    }
+
+    $token = $matches[1];
+
+    try {
+
+        /*
+
+        $decoded = $app->validateToken($token);
+        // DEBUG: Ver qué tiene $decoded
+        Flight::json([
+            'status' => 'debug',
+            'decoded' => $decoded,
+            'sub_type' => gettype($decoded['sub'])
+        ], 200);
+       */
+        
+        $decoded = $app->validateToken($token);
+        $query = "SELECT id, adminname, email FROM admins WHERE id = :id";
+        $stmt = $app->link->prepare($query);
+
+        $stmt->execute(['id' => $decoded['sub']]);
+        $admin = $stmt->fetch(PDO::FETCH_OBJ);
+       // var_dump($admin);
+        //exit();
+
+
+        if (!$admin) {
+            Flight::json(['status' => 'error', 'message' => 'Acceso denegado: no eres admin'], 403);
+            return false;
+        }
+
+        Flight::set('current_admin', $admin);
+        return true;
+    } catch (Exception $e) {
+        Flight::json(['status' => 'error', 'message' => 'Token inválido'], 401);
+        return false;
+    }
+};
+
 // 3. Dashboard Stats
 Flight::route('GET /admin/dashboard', function () use ($app)  {
     //if (!$authenticate()) return;
@@ -80,6 +143,7 @@ Flight::route('POST /admin/login', function () use ($app) {
 });
 
 Flight::start();
+
 
 
 
